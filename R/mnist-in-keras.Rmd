@@ -1,6 +1,8 @@
 ---
 title: "MNIST in Keras with R"
-output: html_notebook
+output:
+  html_document: default
+  html_notebook: default
 ---
 
 The MNIST database (Modified National Institute of Standards and Technology database) is a large database of labelled handwritten digits.
@@ -21,6 +23,9 @@ x_train <- mnist$train$x
 y_train <- mnist$train$y
 x_test <- mnist$test$x
 y_test <- mnist$test$y
+
+image_width <- 28
+image_size <- image_width ** 2
 ```
 
 ### Visualise the data
@@ -33,13 +38,15 @@ Lets have a go at seeing the first few images in the dataset.
 library(tidyverse)
 library(rbokeh)
 
+rotate <- function(x) t(apply(x, 2, rev))
+
 reshape_image <- function(x) {
-  rotate <- function(x) t(apply(x, 2, rev)) 
-  
-  rotate(matrix(x, nrow = 28))
+  x %>%
+    matrix(nrow = image_width) %>%
+    rotate()
 }
 
-imgs <- lapply(seq(1,100), function(i) reshape_image(x_train[i, ]))
+imgs <- lapply(seq(1,100), function(i) rotate(x_train[i, 1:image_width, 1:image_width]))
 image_data <- tibble(i = seq(1, 100), input = imgs)
 
 # group a 10x10 collection of images together
@@ -62,17 +69,17 @@ plot_image(imgs)
 ```
 ```{r}
 # reshape data
-dim(x_train) <- c(nrow(x_train), 784)
-dim(x_test) <- c(nrow(x_test), 784)
+dim(x_train) <- c(nrow(x_train), image_size)
+dim(x_test) <- c(nrow(x_test), image_size)
 
 y_train <- to_categorical(y_train, 10)
 y_test <- to_categorical(y_test, 10)
 ```
 
 ```{r}
-bad_model <- keras_model_sequential() 
+bad_model <- keras_model_sequential(name = 'bad_model') 
 bad_model %>% 
-  layer_dense(units = 16, activation = 'relu', input_shape = c(784)) %>% 
+  layer_dense(units = 16, activation = 'relu', input_shape = c(image_size)) %>% 
   layer_dense(units = 10, activation = 'softmax')
 ```
 
@@ -89,22 +96,68 @@ bad_model %>% compile(
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-history <- bad_model %>% fit(
-  x_train, y_train, 
+history <- bad_model %>%
+  fit(x_train, y_train, 
   epochs = 30, batch_size = 128, 
-  validation_split = 0.2
+  validation_split = 0.2,
+  callbacks = callback_tensorboard(
+    log_dir = "logs", write_grads = TRUE, write_images = TRUE)
 )
 ```
 
 ```{r, echo=FALSE}
-cat("Epoch 30/30\n48000/48000 [==============================] - 1s - loss: 0.4233 - acc: 0.9054 - val_loss: 0.5288 - val_acc: 0.8952")
+cat("Epoch 30/30
+48000/48000 [==============================] - 1s - loss: 0.8586 - acc: 0.9439 - val_loss: 0.8999 - val_acc: 0.9400")
+```
+
+### Plot Loss and Accuracy
+
+It's easy to plot the loss and model accuracy.
+
+```{r}
+plot(history)
+```
+
+It's also easy to evaluate the model on the test data.
+
+```{r}
+bad_model %>% evaluate(x_test, y_test, verbose = 0)
+```
+
+```{r}
+entropy <- function(p) - sum(ifelse(p > 0, p * log(p), 0))
+
+preds <- bad_model %>%
+  predict_proba(x_test) %>%
+  as_tibble()
+
+colnames(preds) <- 0:9
+
+preds <- tibble(
+      class   = apply(preds,  1, which.max) - 1,
+      target  = apply(y_test, 1, which.max) - 1,
+      entropy = apply(preds,  1, entropy),
+      image   = lapply(1:nrow(x_test), function(i) reshape_image(x_test[1, 1:image_size]))) %>%
+  mutate(correct = class == target)
+
+preds
+```
+
+```{r}
+preds %>%
+  group_by(class) %>%
+  summarise(entropy = mean(entropy)) %>%
+  mutate(class = as.character(class)) %>%
+  ggplot(aes(x = class, y = entropy)) +
+  geom_bar(stat = 'identity')
+```
+
+```{r}
+
 ```
 
 
-
-
-
-
+Come here for the CNN model: https://keras.rstudio.com/articles/examples/mnist_cnn.html
 
 
 
