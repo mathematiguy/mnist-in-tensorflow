@@ -7,8 +7,15 @@ The MNIST database (Modified National Institute of Standards and Technology data
 
 The MNIST database is also widely used for training and testing in the field of machine learning, and is considered the 'Hello World' task of image processing.
 
+## Keras
+
+We will be using the `Keras` library to construct the model. Keras is much more user-friendly than TensorFlow, and we will be able to push away some of the difficult parts to `Keras` to solve so we make fewer errors. Keras also comes with better defaults, so our models should have fewer simple errors (e.g. forgetting to add biases) overall.
+
+### Load the MNIST Dataset
+
 ```{r, warning=FALSE}
 library(keras)
+
 mnist <- dataset_mnist()
 x_train <- mnist$train$x
 y_train <- mnist$train$y
@@ -16,34 +23,65 @@ x_test <- mnist$test$x
 y_test <- mnist$test$y
 ```
 
+### Visualise the data
+
+`x_train` is a `r nrow(x_train)` by `r ncol(x_train)` matrix of values from `r min(x_train)` to `r max(x_train)`. Each row is an image, and there are `r nrow(x_train)` images overall.
+
+Lets have a go at seeing the first few images in the dataset.
+
+```{r, message=FALSE, warning=FALSE, fig.align='center'}
+library(tidyverse)
+library(rbokeh)
+
+reshape_image <- function(x) {
+  rotate <- function(x) t(apply(x, 2, rev)) 
+  
+  rotate(matrix(x, nrow = 28))
+}
+
+imgs <- lapply(seq(1,100), function(i) reshape_image(x_train[i, ]))
+image_data <- tibble(i = seq(1, 100), input = imgs)
+
+# group a 10x10 collection of images together
+imgs <- image_data %>%
+  group_by(i %% 10) %>%
+  summarise(row = list(Reduce(cbind, input))) %>%
+  do(as_tibble(Reduce(rbind, .$row))) %>%
+  as.matrix()
+
+fig_params = list(xgrid = FALSE, ygrid = FALSE, xaxes = FALSE, yaxes = FALSE, tools = NULL)
+black_and_white <- colorRampPalette(c('white', 'black'))(255)
+
+plot_image <- function(x) {
+  # create the plot
+  do.call(figure, fig_params) %>%
+    ly_image(x, palette = black_and_white)
+}
+
+plot_image(imgs)
+```
 ```{r}
-# reshape
+# reshape data
 dim(x_train) <- c(nrow(x_train), 784)
 dim(x_test) <- c(nrow(x_test), 784)
 
-# rescale
-x_train <- x_train / 255
-x_test <- x_test / 255
-```
-
-```{r}
 y_train <- to_categorical(y_train, 10)
 y_test <- to_categorical(y_test, 10)
 ```
 
 ```{r}
-model <- keras_model_sequential() 
-model %>% 
+bad_model <- keras_model_sequential() 
+bad_model %>% 
   layer_dense(units = 16, activation = 'relu', input_shape = c(784)) %>% 
   layer_dense(units = 10, activation = 'softmax')
 ```
 
 ```{r}
-summary(model)
+summary(bad_model)
 ```
 
 ```{r}
-model %>% compile(
+bad_model %>% compile(
   loss = 'categorical_crossentropy',
   optimizer = optimizer_rmsprop(),
   metrics = c('accuracy')
@@ -51,13 +89,16 @@ model %>% compile(
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-history <- model %>% fit(
+history <- bad_model %>% fit(
   x_train, y_train, 
   epochs = 30, batch_size = 128, 
   validation_split = 0.2
 )
 ```
 
+```{r, echo=FALSE}
+cat("Epoch 30/30\n48000/48000 [==============================] - 1s - loss: 0.4233 - acc: 0.9054 - val_loss: 0.5288 - val_acc: 0.8952")
+```
 
 
 
