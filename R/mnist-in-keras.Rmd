@@ -46,35 +46,48 @@ reshape_image <- function(x) {
     rotate()
 }
 
-imgs <- lapply(seq(1,100), function(i) rotate(x_train[i, 1:image_width, 1:image_width]))
-image_data <- tibble(i = seq(1, 100), input = imgs)
+image_data <- tibble(
+  input = lapply(seq(1,nrow(x_train)), function(i) rotate(x_train[i,1:28, 1:28])),
+  target = y_train) %>%
+  group_by(target) %>%
+  do(sample_n(., size = 10)) %>%
+  ungroup()
 
 # group a 10x10 collection of images together
 imgs <- image_data %>%
-  group_by(i %% 10) %>%
+  group_by(target) %>%
   summarise(row = list(Reduce(cbind, input))) %>%
   do(as_tibble(Reduce(rbind, .$row))) %>%
   as.matrix()
 
-fig_params = list(xgrid = FALSE, ygrid = FALSE, xaxes = FALSE, yaxes = FALSE, tools = NULL)
+params = list(xgrid = FALSE, ygrid = FALSE, xaxes = FALSE, yaxes = FALSE, tools = NULL)
 black_and_white <- colorRampPalette(c('white', 'black'))(255)
 
-plot_image <- function(x) {
+plot_image <- function(x, fig_params = list(NULL), img_params = list(NULL)) {
   # create the plot
-  do.call(figure, fig_params) %>%
-    ly_image(x, palette = black_and_white)
+  fig = do.call(figure, fig_params)
+  do.call(ly_image, append(list(fig, x), img_params))
 }
 
-plot_image(imgs)
+plot_image(imgs, fig_params = params, img_params = list(palette = black_and_white))
 ```
+
+## Preprocess Data
+
 ```{r}
 # reshape data
 dim(x_train) <- c(nrow(x_train), image_size)
 dim(x_test) <- c(nrow(x_test), image_size)
 
+# Transform RGB values into [0,1] range
+x_train <- x_train / 255
+x_test <- x_test / 255
+
 y_train <- to_categorical(y_train, 10)
 y_test <- to_categorical(y_test, 10)
 ```
+
+## Define Bad Model
 
 ```{r}
 bad_model <- keras_model_sequential(name = 'bad_model') 
@@ -95,6 +108,8 @@ bad_model %>% compile(
 )
 ```
 
+## Train Bad Model
+
 ```{r, message=FALSE, warning=FALSE}
 history <- bad_model %>%
   fit(x_train, y_train, 
@@ -107,7 +122,7 @@ history <- bad_model %>%
 
 ```{r, echo=FALSE}
 cat("Epoch 30/30
-48000/48000 [==============================] - 1s - loss: 0.8586 - acc: 0.9439 - val_loss: 0.8999 - val_acc: 0.9400")
+48000/48000 [==============================] - 2s - loss: 0.1327 - acc: 0.9617 - val_loss: 0.1830 - val_acc: 0.9478")
 ```
 
 ### Plot Loss and Accuracy
@@ -121,45 +136,156 @@ plot(history)
 It's also easy to evaluate the model on the test data.
 
 ```{r}
-bad_model %>% evaluate(x_test, y_test, verbose = 0)
+evaluate(bad_model, x_test, y_test, verbose = 0)
 ```
 
 ```{r}
-entropy <- function(p) - sum(ifelse(p > 0, p * log(p), 0))
+calculate_preds <- function(model, x_test) {
+  
+  entropy <- function(p) - sum(ifelse(p > 0, p * log(p), 0))
+  
+  preds <- bad_model %>%
+    predict_proba(x_test) %>%
+    as_tibble()
+  
+  colnames(preds) <- 0:9
+  
+  preds <- tibble(
+        class   = apply(preds,  1, which.max) - 1,
+        target  = apply(y_test, 1, which.max) - 1,
+        entropy = apply(preds,  1, entropy),
+        image   = lapply(1:nrow(x_test), function(i) reshape_image(x_test[i, 1:image_size]))) %>%
+    mutate(correct = class == target)
+  
+  return(preds)
+}
 
-preds <- bad_model %>%
-  predict_proba(x_test) %>%
-  as_tibble()
-
-colnames(preds) <- 0:9
-
-preds <- tibble(
-      class   = apply(preds,  1, which.max) - 1,
-      target  = apply(y_test, 1, which.max) - 1,
-      entropy = apply(preds,  1, entropy),
-      image   = lapply(1:nrow(x_test), function(i) reshape_image(x_test[1, 1:image_size]))) %>%
-  mutate(correct = class == target)
-
-preds
+bad_preds <- calculate_preds(bad_model, x_test)
+bad_preds
 ```
 
 ```{r}
-preds %>%
+plot_preds <- function(preds) {
+  preds %>%
   group_by(class) %>%
   summarise(entropy = mean(entropy)) %>%
   mutate(class = as.character(class)) %>%
   ggplot(aes(x = class, y = entropy)) +
   geom_bar(stat = 'identity')
+}
+
+plot_preds(bad_preds)
 ```
 
 ```{r}
+plot_conf_matrix <- function(preds) {
+  preds %>%
+    group_by(class, target) %>%
+    summarise(best_image = image[which.min(entropy)], count = n()) %>%
+    full_join(tibble(class = Reduce(c, lapply(seq(0, 9), function(x) rep(x, 10))),
+        target = rep(seq(0, 9), 10)),
+      by = c('class', 'target')) %>%
+    mutate(count = ifelse(is.na(count), 0, count)) %>%
+    mutate(best_image = ifelse(sapply(best_image, function(x) length(x) == 0), 
+      list(matrix(as.integer(rep(0, image_size)), nrow = image_width)), 
+      best_image)) %>% 
+    mutate(weighted_image = mapply(
+      function(c, img) list(c * img), c = count, img = best_image)) %>%
+    arrange(desc(class), desc(target)) %>%
+    summarise(row = list(Reduce(cbind, weighted_image))) %>%
+    do(as_tibble(Reduce(rbind, .$row))) %>%
+    as.matrix() %>%
+    log1p() %>%
+    plot_image(fig_params = params, 
+               img_params = list(palette = colorRampPalette(c('dark blue', 'green', 'yellow', 'orange', 'dark red'))(100)))
+}
 
+plot_conf_matrix(bad_preds)
+```
+
+## Convolutional Network
+
+
+We reshape the training examples. This time the images need to be input as 2d images.
+```{r}
+# Redefine  dimension of train/test inputs
+dim(x_train) <- c(nrow(x_train), image_width, image_width, 1) 
+dim(x_test) <- c(nrow(x_test), image_width, image_width, 1)
+```
+
+Next we define some hyperparameters.
+```{r}
+# Define conv_model -----------------------------------------------------------
+input_shape <- c(image_width, image_width, 1)
+num_classes <- 10
+batch_size <- 128
+epochs = 10
+```
+
+### Define the model
+```{r}
+conv_model <- keras_model_sequential()
+conv_model %>%
+  layer_conv_2d(filters = 64, kernel_size = c(8,8), activation = 'relu',
+                input_shape = input_shape) %>% 
+  layer_max_pooling_2d(pool_size = c(4, 4)) %>% 
+  layer_conv_2d(filters = 128, kernel_size = c(8,8), activation = 'relu') %>% 
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_conv_2d(filters = 256, kernel_size = c(4,4), activation = 'relu') %>% 
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 128, activation = 'relu') %>% 
+  layer_dropout(rate = 0.8) %>% 
+  layer_dense(units = 256, activation = 'relu') %>% 
+  layer_dropout(rate = 0.8) %>% 
+  layer_dense(units = num_classes, activation = 'softmax')
+
+# Compile conv_model
+conv_model %>% compile(
+  loss = loss_categorical_crossentropy,
+  optimizer = optimizer_adam(lr = 0.0001),
+  metrics = c('accuracy')
+)
+```
+
+## Train the model
+
+```{r}
+# Train & Evaluate -------------------------------------------------------
+conv_history <- conv_model %>% fit(
+  x_train, y_train,
+  batch_size = batch_size,
+  epochs = epochs,
+  verbose = 1,
+  validation_data = list(x_test, y_test),
+  callbacks = callback_tensorboard(
+    log_dir = "logs", write_grads = TRUE, write_images = TRUE)
+)
+```
+
+```{r}
+plot(conv_history)
 ```
 
 
-Come here for the CNN model: https://keras.rstudio.com/articles/examples/mnist_cnn.html
+```{r}
+scores <- conv_model %>% evaluate(
+  x_test, y_test, verbose = 0
+)
 
+# Output metrics
+cat('Test loss:', scores[[1]], '\n')
+cat('Test accuracy:', scores[[2]], '\n')
+```
 
+```{r}
+conv_preds <- calculate_preds(conv_model, x_test)
+plot_preds(conv_preds)
+```
+
+```{r}
+plot_conf_matrix(conv_preds)
+```
 
 
 

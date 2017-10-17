@@ -139,6 +139,8 @@ vignettes/*.pdf
 *.utf8.md
 *.knit.md
 
+## Custom Added Entries
 
 # tensorboard summaries
 /TFLearn/tflearn_logs/*
+/R/logs/*

@@ -1,0 +1,284 @@
+---
+title: "MNIST in Keras with R"
+output:
+html_document: default
+html_notebook: default
+---
+  
+  The MNIST database (Modified National Institute of Standards and Technology database) is a large database of labelled handwritten digits.
+
+The MNIST database is also widely used for training and testing in the field of machine learning, and is considered the 'Hello World' task of image processing.
+
+## Keras
+
+We will be using the `Keras` library to construct the model. Keras is much more user-friendly than TensorFlow, and we will be able to push away some of the difficult parts to `Keras` to solve so we make fewer errors. Keras also comes with better defaults, so our models should have fewer simple errors (e.g. forgetting to add biases) overall.
+
+### Load the MNIST Dataset
+
+```{r, warning=FALSE}
+library(keras)
+
+mnist <- dataset_mnist()
+x_train <- mnist$train$x
+y_train <- mnist$train$y
+x_test <- mnist$test$x
+y_test <- mnist$test$y
+
+image_width <- 28
+image_size <- image_width ** 2
+```
+
+### Visualise the data
+
+`x_train` is a `r nrow(x_train)` by `r ncol(x_train)` matrix of values from `r min(x_train)` to `r max(x_train)`. Each row is an image, and there are `r nrow(x_train)` images overall.
+
+Lets have a go at seeing the first few images in the dataset.
+
+```{r, message=FALSE, warning=FALSE, fig.align='center'}
+library(tidyverse)
+library(rbokeh)
+
+rotate <- function(x) t(apply(x, 2, rev))
+
+reshape_image <- function(x) {
+  x %>%
+    matrix(nrow = image_width) %>%
+    rotate()
+}
+
+image_data <- tibble(
+  input = lapply(seq(1,nrow(x_train)), function(i) rotate(x_train[i,1:28, 1:28])),
+  target = y_train) %>%
+  group_by(target) %>%
+  do(sample_n(., size = 10)) %>%
+  ungroup()
+
+# group a 10x10 collection of images together
+imgs <- image_data %>%
+  group_by(target) %>%
+  summarise(row = list(Reduce(cbind, input))) %>%
+  do(as_tibble(Reduce(rbind, .$row))) %>%
+  as.matrix()
+
+params = list(xgrid = FALSE, ygrid = FALSE, xaxes = FALSE, yaxes = FALSE, tools = NULL)
+black_and_white <- colorRampPalette(c('white', 'black'))(255)
+
+plot_image <- function(x, fig_params = list(NULL), img_params = list(NULL)) {
+  # create the plot
+  fig = do.call(figure, fig_params)
+  do.call(ly_image, append(list(fig, x), img_params))
+}
+
+plot_image(imgs, fig_params = params, img_params = list(palette = black_and_white))
+```
+
+## Preprocess Data
+
+```{r}
+# reshape data
+dim(x_train) <- c(nrow(x_train), image_size)
+dim(x_test) <- c(nrow(x_test), image_size)
+
+# Transform RGB values into [0,1] range
+x_train <- x_train / 255
+x_test <- x_test / 255
+
+y_train <- to_categorical(y_train, 10)
+y_test <- to_categorical(y_test, 10)
+```
+
+## Dense Network
+
+Next we define some hyperparameters.
+```{r}
+# Define bad_model -----------------------------------------------------------
+num_classes <- 10
+batch_size <- 128
+epochs = 30
+```
+
+### Define the model
+```{r}
+model_loaded = FALSE
+if (file.exists("models/bad_model.hdf5")) {
+  bad_model = keras::load_model_hdf5("models/bad_model.hdf5")
+  model_loaded = TRUE
+  
+} else {
+  bad_model <- keras_model_sequential(name = 'bad_model') 
+  bad_model %>% 
+  layer_dense(units = 16, activation = 'relu', input_shape = c(image_size)) %>% 
+  layer_dense(units = num_classes, activation = 'softmax') %>%
+  compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_rmsprop(),
+    metrics = c('accuracy')
+)
+}
+```
+
+```{r}
+bad_model
+```
+
+## Train the model
+
+```{r}
+if (!model_loaded) {
+  # Train & Evaluate -------------------------------------------------------
+  bad_history <- bad_model %>%
+  fit(x_train, y_train, 
+  epochs = epochs, batch_size = batch_size, 
+  validation_split = 0.2,
+  callbacks = callback_tensorboard(
+    log_dir = "logs", write_grads = TRUE, write_images = TRUE)
+    )
+}
+```
+
+```{r, echo=FALSE}
+cat("Epoch 30/30
+48000/48000 [==============================] - 1s - loss: 0.1318 - acc: 0.9620 - val_loss: 0.1763 - val_acc: 0.9513")
+```
+
+
+```{r}
+if (!model_loaded) {
+  keras::save_model_hdf5(bad_model, "models/bad_model.hdf5")
+}
+```
+
+
+```{r}
+scores <- bad_model %>% evaluate(
+  x_test, y_test, verbose = 0
+)
+
+# Output metrics
+cat('Test loss:', scores[[1]], '\n')
+cat('Test accuracy:', scores[[2]], '\n')
+```
+
+```{r}
+if (!model_loaded) {
+  bad_metrics <- as_tibble(bad_history$metrics) %>%
+    mutate(epoch = seq(nrow(.))) %>%
+    gather(val_loss, val_acc, loss, acc, key = "measure", value = "value")
+  
+  write_csv(bad_metrics, "models/bad_metrics.cav")
+} else {
+  bad_metrics = read_csv("models/bad_metrics.csv")
+}
+
+bad_metrics %>%
+  filter(!(measure %in% c('acc', 'val_acc'))) %>%
+  ggplot(aes(x = epoch, y = log10(value), group = measure, color = measure)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Model loss by epoch") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r, warning=FALSE}
+bad_metrics %>%
+  filter(!(measure %in% c('loss', 'val_loss'))) %>%
+  ggplot(aes(x = epoch, y = value, group = measure, color = measure)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(limits = c(0.91, 0.97)) +
+  ggtitle("Model accuracy by epoch") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+calculate_preds <- function(model, x_test) {
+  
+  entropy <- function(p) - sum(ifelse(p > 0, p * log(p), 0))
+  
+  preds <- model %>%
+    predict_proba(x_test) %>%
+    as_tibble()
+  
+  colnames(preds) <- 0:9
+  
+  preds <- tibble(
+    class   = apply(preds,  1, which.max) - 1,
+    target  = apply(y_test, 1, which.max) - 1,
+    entropy = apply(preds,  1, entropy),
+    image   = lapply(1:nrow(x_test), 
+                     function(i) reshape_image(x_test[i, 1:image_size]))) %>%
+    mutate(correct = class == target)
+  
+  return(preds)
+}
+bad_preds <- calculate_preds(bad_model, x_test)
+bad_preds
+```
+
+```{r}
+plot_preds <- function(preds) {
+  preds %>%
+    group_by(class) %>%
+    summarise(entropy = mean(entropy)) %>%
+    mutate(class = as.character(class)) %>%
+    ggplot(aes(x = class, y = entropy)) +
+    geom_bar(stat = 'identity')
+}
+
+plot_preds(bad_preds)
+```
+
+```{r}
+plot_conf_matrix <- function(preds) {
+  preds %>%
+    group_by(class, target) %>%
+    summarise(best_image = image[which.min(entropy)], count = n()) %>%
+    full_join(tibble(class = Reduce(c, lapply(seq(0, 9), function(x) rep(x, 10))),
+                     target = rep(seq(0, 9), 10)),
+              by = c('class', 'target')) %>%
+    mutate(count = ifelse(is.na(count), 0, count)) %>%
+    mutate(best_image = ifelse(sapply(best_image, function(x) length(x) == 0), 
+                               list(matrix(as.integer(rep(0, image_size)), nrow = image_width)), 
+                               best_image)) %>% 
+    mutate(weighted_image = mapply(
+      function(c, img) list(c * img), c = count, img = best_image)) %>%
+    arrange(desc(class), desc(target)) %>%
+    summarise(row = list(Reduce(cbind, weighted_image))) %>%
+    do(as_tibble(Reduce(rbind, .$row))) %>%
+    as.matrix() %>%
+    log1p() %>%
+    plot_image(fig_params = params, 
+               img_params = list(palette = colorRampPalette(c('dark blue', 'green', 'yellow', 'orange', 'dark red'))(100)))
+}
+
+plot_conf_matrix(bad_preds)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
