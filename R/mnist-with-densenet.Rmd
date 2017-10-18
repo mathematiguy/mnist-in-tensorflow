@@ -5,7 +5,7 @@ html_document: default
 html_notebook: default
 ---
   
-  The MNIST database (Modified National Institute of Standards and Technology database) is a large database of labelled handwritten digits.
+The MNIST database (Modified National Institute of Standards and Technology database) is a large database of labelled handwritten digits.
 
 The MNIST database is also widely used for training and testing in the field of machine learning, and is considered the 'Hello World' task of image processing.
 
@@ -47,7 +47,7 @@ reshape_image <- function(x) {
 }
 
 image_data <- tibble(
-  input = lapply(seq(1,nrow(x_train)), function(i) rotate(x_train[i,1:28, 1:28])),
+  input = lapply(seq(1,nrow(x_train)), function(i) rotate(x_train[i,1:image_width, 1:image_width])),
   target = y_train) %>%
   group_by(target) %>%
   do(sample_n(., size = 10)) %>%
@@ -228,7 +228,7 @@ plot_preds <- function(preds) {
 plot_preds(bad_preds)
 ```
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 plot_conf_matrix <- function(preds) {
   preds %>%
     group_by(class, target) %>%
