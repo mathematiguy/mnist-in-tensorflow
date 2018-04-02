@@ -144,3 +144,4 @@ vignettes/*.pdf
 # tensorboard summaries
 /TFLearn/tflearn_logs/*
 /R/logs/*
+/Python/tflearn_logs
